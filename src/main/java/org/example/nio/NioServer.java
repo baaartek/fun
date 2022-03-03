@@ -1,17 +1,12 @@
 package org.example.nio;
 
-import org.example.common.MyByteBuffer;
+import org.example.nio.custom.FancyChannelReadHandler;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
-
-class PairOfBuffers {
-    public MyByteBuffer in = new MyByteBuffer();
-    public MyByteBuffer out = new MyByteBuffer();
-}
 
 public class NioServer {
 
@@ -36,31 +31,6 @@ public class NioServer {
 
     }
 
-    // TODO sprawdzania nie trzeba zaczynac ciagle od poczatku
-    private static boolean readDone(MyByteBuffer buffer) {
-        for(int i=0; i<buffer.getSize(); i++) {
-            if(buffer.getBuffer()[i] == '\n') {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static void prepareResponseAndClearRead(MyByteBuffer in, MyByteBuffer out) {
-        int idx = 0;
-        while(in.getBuffer()[idx] != '\n') {
-            idx++;
-        }
-
-        out.add(in.getBuffer(), 0, idx);
-        out.add(in.getBuffer(), 0, idx);
-        out.add(new byte[]{'\n'}, 0, 1);
-
-        in.clear(idx + 1);
-
-
-    }
-
     private static void handleClients(Selector clientSelector) {
 
         try {
@@ -69,22 +39,21 @@ public class NioServer {
                 int res = clientSelector.select(0);
                 // TODO handle res == 0
                 for(SelectionKey key : clientSelector.selectedKeys()) {
-                    PairOfBuffers buffers = (PairOfBuffers) key.attachment();
+                    MyChannel myChannel = (MyChannel) key.attachment();
                     SocketChannel channel = (SocketChannel) key.channel();
                     if(key.isReadable()) {
                         ByteBuffer tmp = ByteBuffer.wrap(buffer);
                         channel.read(tmp);
-                        buffers.in.add(buffer, 0, tmp.position());
-                        if (readDone(buffers.in)) {
-                            prepareResponseAndClearRead(buffers.in, buffers.out);
-                        }
+                        myChannel.addRead(buffer, 0, tmp.position());
+
                     }
-                    if(buffers.out.getSize() > 0) {
-                        ByteBuffer tmp = ByteBuffer.wrap(buffers.out.getBuffer(), 0, buffers.out.getSize());
+                    int numOfBytesToWrite = myChannel.getNumOfBytesToWrite();
+                    if(numOfBytesToWrite > 0) {
+                        ByteBuffer tmp = myChannel.getBytesToWrite();
                         int written = channel.write(tmp);
                         if(written > 0) {
-                            buffers.out.clear(written);
-                            if(buffers.out.getSize() == 0) {
+                            myChannel.notifyBytesWritten(written);
+                            if(numOfBytesToWrite == written) {
                                 key.interestOpsAnd(~SelectionKey.OP_WRITE);
                             }
                         } else {
@@ -111,7 +80,7 @@ public class NioServer {
             ServerSocketChannel channel = (ServerSocketChannel) key.channel();
             SocketChannel clientChannel = channel.accept();
             clientChannel.configureBlocking(false);
-            clientChannel.register(clientSelector, SelectionKey.OP_READ, new PairOfBuffers());
+            clientChannel.register(clientSelector, SelectionKey.OP_READ, new MyChannel(new FancyChannelReadHandler()));
             clientSelector.wakeup();
         }
 
